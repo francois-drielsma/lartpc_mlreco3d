@@ -9,7 +9,7 @@ from scipy.sparse.csgraph import minimum_spanning_tree
 from mlreco.utils.numba import numba_wrapper, submatrix_nb, cdist_nb
 
 
-@nb.njit
+@nb.njit(cache=True)
 def loop_graph(n: nb.int64) -> nb.int64[:,:]:
     """
     Function that returns an incidence matrix of a graph that only
@@ -28,7 +28,7 @@ def loop_graph(n: nb.int64) -> nb.int64[:,:]:
     return ret.T
 
 
-@nb.njit
+@nb.njit(cache=True)
 def complete_graph(batch_ids: nb.int64[:],
                    dist_mat: nb.float64[:,:] = None,
                    max_dist: nb.float64 = -1.) -> nb.int64[:,:]:
@@ -73,7 +73,7 @@ def complete_graph(batch_ids: nb.int64[:],
 
     return ret.T
 
-@nb.njit
+@nb.njit(cache=True)
 def delaunay_graph(data: nb.float64[:,:],
                    clusts: nb.types.List(nb.int64[:]),
                    batch_ids: nb.int64[:],
@@ -127,7 +127,7 @@ def delaunay_graph(data: nb.float64[:,:],
     return ret.T
 
 
-@nb.njit
+@nb.njit(cache=True)
 def mst_graph(batch_ids: nb.int64[:],
               dist_mat: nb.float64[:,:] = None,
               max_dist: nb.float64 = -1.) -> nb.int64[:,:]:
@@ -168,7 +168,7 @@ def mst_graph(batch_ids: nb.int64[:],
     return ret.T
 
 
-@nb.njit
+@nb.njit(cache=True)
 def knn_graph(batch_ids: nb.int64[:],
               k: nb.int64,
               dist_mat: nb.float64[:,:] = None) -> nb.int64[:,:]:
@@ -204,7 +204,7 @@ def knn_graph(batch_ids: nb.int64[:],
     return ret.T
 
 
-@nb.njit
+@nb.njit(cache=True)
 def bipartite_graph(batch_ids: nb.int64[:],
                     primaries: nb.boolean[:],
                     dist_mat: nb.float64[:,:] = None,
@@ -266,7 +266,7 @@ def get_cluster_edge_features(data, clusts, edge_index):
     return _get_cluster_edge_features(data, clusts, edge_index)
     #return _get_cluster_edge_features_vec(data, clusts, edge_index)
 
-@nb.njit(parallel=True)
+@nb.njit(parallel=True, cache=True)
 def _get_cluster_edge_features(data: nb.float32[:,:],
                                clusts: nb.types.List(nb.int64[:]),
                                edge_index: nb.int64[:,:]) -> nb.float32[:,:]:
@@ -299,7 +299,7 @@ def _get_cluster_edge_features(data: nb.float32[:,:],
 
     return feats
 
-@nb.njit
+@nb.njit(cache=True)
 def _get_cluster_edge_features_vec(data: nb.float32[:,:],
                                    clusts: nb.types.List(nb.int64[:]),
                                    edge_index: nb.int64[:,:]) -> nb.float32[:,:]:
@@ -345,7 +345,7 @@ def get_voxel_edge_features(data, edge_index):
     """
     return _get_voxel_edge_features(data, edge_index)
 
-@nb.njit(parallel=True)
+@nb.njit(parallel=True, cache=True)
 def _get_voxel_edge_features(data: nb.float32[:,:],
                          edge_index: nb.int64[:,:]) -> nb.float32[:,:]:
     feats = np.empty((len(edge_index), 19), dtype=data.dtype)
@@ -387,7 +387,7 @@ def get_edge_distances(voxels, clusts, edge_index):
     """
     return _get_edge_distances(voxels, clusts, edge_index)
 
-@nb.njit(parallel=True)
+@nb.njit(parallel=True, cache=True)
 def _get_edge_distances(voxels: nb.float32[:,:],
                         clusts: nb.types.List(nb.int64[:]),
                         edge_index:  nb.int64[:,:]) -> (nb.float32[:], nb.int64[:], nb.int64[:]):
@@ -425,7 +425,7 @@ def inter_cluster_distance(voxels, clsuts, batch_ids):
     """
     return _inter_cluster_distance(voxels, clusts, batch_ids, mode)
 
-@nb.njit(parallel=True)
+@nb.njit(parallel=True, cache=True)
 def _inter_cluster_distance(voxels: nb.float64[:,:],
                             clusts: nb.types.List(nb.int64[:]),
                             batch_ids: nb.int64[:]) -> nb.float64[:,:]:
@@ -451,13 +451,12 @@ def get_fragment_edges(graph, clust_ids):
     Args:
         graph (np.ndarray)    : (E,2) Tensor of [clust_id_1, clust_id_2]
         clust_ids (np.ndarray): (C) List of fragment cluster ids
-        batch_ids (np.ndarray): (C) List of fragment batch ids
     Returns:
         np.ndarray: (E,2) Tensor of true edges [frag_id_1, frag_id2]
     """
     return _get_fragment_edges(graph, clust_ids)
 
-@nb.njit
+@nb.njit(cache=True)
 def _get_fragment_edges(graph: nb.int64[:,:],
                         clust_ids: nb.int64[:]) -> nb.int64[:,:]:
     # Loop over the graph edges, find the fragment ids, append

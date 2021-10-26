@@ -28,6 +28,7 @@ class DBSCANFragmenter(torch.nn.Module):
         # Global DBSCAN clustering parameters
         self.dim = model_cfg.get('dim', 3)
         self.eps = model_cfg.get('eps', 1.999)
+        self.metric = model_cfg.get('metric', 'euclidean')
         self.min_samples = model_cfg.get('min_samples', 1)
         self.min_size = model_cfg.get('min_size', 3)
         self.num_classes = model_cfg.get('num_classes', 4)
@@ -58,7 +59,8 @@ class DBSCANFragmenter(torch.nn.Module):
         from scipy.spatial.distance import cdist
 
         # If tracks are clustered, get the track points from the PPN output
-        data = data.detach().cpu().numpy()
+        if isinstance(data, torch.Tensor):
+            data = data.detach().cpu().numpy()
         if self.break_tracks and self.track_label in self.cluster_classes:
             assert output is not None or points is not None
             if points is None:

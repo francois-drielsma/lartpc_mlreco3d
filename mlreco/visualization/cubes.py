@@ -31,6 +31,7 @@ def scatter_cubes(coords, cubesize=1, color='orange', opacity=0.8, hovertext=Non
                     cmax=cmax,
                     hoverinfo=['x','y','z'] if hovertext is None else ['x', 'y', 'z','text'],
                     hovertext=hovertext,
+                    flatshading = True,
                     **kwargs
                     )
                 )

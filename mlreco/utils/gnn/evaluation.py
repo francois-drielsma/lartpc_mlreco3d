@@ -2,12 +2,83 @@
 import numpy as np
 import numba as nb
 
-from mlreco.utils.numba import submatrix_nb, argmax_nb, softmax_nb, log_loss_nb
+from mlreco.utils.numba import numba_wrapper, submatrix_nb, argmax_nb, unique_nb, softmax_nb, log_loss_nb
 from mlreco.utils.metrics import SBD, AMI, ARI, purity_efficiency
+from mlreco.utils.gnn.cluster import _get_cluster_label
 
 int_array = nb.int64[:]
 
-@nb.njit
+@numba_wrapper(list_args=['node_pred', 'clusts_stack', 'edge_index', 'edge_pred'])
+def node_primary_assignment(node_pred, cluster_label, clusts_stack, edge_index, edge_pred, batch_ids,
+                            batch_col, use_group_pred, group_pred_alg, high_purity, balance_classes):
+    '''
+    Bla
+    '''
+    return _node_primary_assignment(node_pred, cluster_label, clusts_stack, edge_index, edge_pred, batch_ids,
+                                    batch_col, use_group_pred, group_pred_alg, high_purity, balance_classes)
+
+@nb.njit(cache=True)
+def _node_primary_assignment(node_pred: nb.types.List(nb.float32[:,:]),
+                            cluster_label: nb.float64[:,:],
+                            clusts_stack: nb.types.List(nb.int64[:]),
+                            edge_index: nb.types.List(nb.int64[:,:]),
+                            edge_pred: nb.types.List(nb.float32[:,:]),
+                            batch_ids: nb.int64[:],
+                            batch_col: nb.int64,
+                            use_group_pred: nb.boolean,
+                            group_pred_alg: str,
+                            high_purity: nb.boolean,
+                            balance_classes: nb.boolean) -> (nb.int64[:], nb.bool_[:], nb.float64[:]):
+
+    n_clusts     = len(clusts_stack)
+    node_assn    = np.zeros(n_clusts, dtype=np.int64)
+    node_mask    = np.ones (n_clusts, dtype=np.bool_)
+    node_weights = np.ones (n_clusts, dtype=np.float64)
+    batches      = cluster_label[:,batch_col]
+    clust_count  = 0
+    for i, b in enumerate(np.unique(batches)):
+        # Narrow down the label tensor and the clusters to the batch at hand
+        labels = cluster_label[batches==b]
+        if not len(node_pred[i]):
+            continue
+        clusts = [clusts_stack[j] for j in np.where(batch_ids==b)[0]]
+        n = len(clusts)
+        node_range   = np.arange(clust_count, clust_count+n)
+        clust_count += n
+
+        # Get the cluster and group labels
+        clust_ids = _get_cluster_label(labels, nb.typed.List(clusts))
+        group_ids = _get_cluster_label(labels, nb.typed.List(clusts), column=6)
+
+        # If requested, relabel the group ids in the batch according to the group predictions
+        if use_group_pred:
+            if group_pred_alg == 'threshold':
+                pred_group_ids = node_assignment(edge_index[i], argmax_nb(edge_pred[i], axis=1), n)
+            elif group_pred_alg == 'score':
+                pred_group_ids = node_assignment_score(edge_index[i], edge_pred[i], n)
+            else:
+                raise ValueError('Group prediction algorithm not recognized')
+            group_ids = relabel_groups(clust_ids, group_ids, pred_group_ids)
+
+        # If requested, remove groups that do not contain exactly one primary from the loss
+        if high_purity:
+            purity_mask = node_purity_mask(clust_ids, group_ids)
+            node_mask[node_range] = purity_mask
+            if not purity_mask.any(): continue
+
+        # If the majority (pixel-wise) cluster ID agrees with the majority group ID, assign as primary
+        node_assn[node_range] = (clust_ids == group_ids).astype(np.int64)
+
+    # Balance classes if needed (add up to the total number of selected clusters)
+    if balance_classes:
+        vals, counts = unique_nb(node_assn)
+        if len(vals) == 2:
+            for k, v in enumerate(vals):
+                node_weights[node_assn == v] = len(node_assn)/counts[k]
+
+    return node_assn, node_mask, node_weights
+
+@nb.njit(cache=True)
 def edge_assignment(edge_index: nb.int64[:,:],
                     groups: nb.int64[:]) -> nb.int64[:]:
     """
@@ -24,7 +95,7 @@ def edge_assignment(edge_index: nb.int64[:,:],
     return groups[edge_index[:,0]] == groups[edge_index[:,1]]
 
 
-@nb.njit
+@nb.njit(cache=True)
 def edge_assignment_from_graph(edge_index: nb.int64[:,:],
                                true_edge_index: nb.int64[:,:]) -> nb.int64[:]:
     """
@@ -45,7 +116,7 @@ def edge_assignment_from_graph(edge_index: nb.int64[:,:],
     return edge_assn
 
 
-@nb.njit
+@nb.njit(cache=True)
 def union_find(edge_index: nb.int64[:,:],
                n: nb.int64) -> (nb.int64[:], nb.types.DictType(nb.int64, nb.int64[:])):
     """
@@ -72,7 +143,7 @@ def union_find(edge_index: nb.int64[:,:],
     return group_ids, groups
 
 
-@nb.njit
+@nb.njit(cache=True)
 def node_assignment(edge_index: nb.int64[:,:],
                     edge_label: nb.int64[:],
                     n: nb.int64) -> nb.int64[:]:
@@ -93,7 +164,7 @@ def node_assignment(edge_index: nb.int64[:,:],
     return union_find(on_edges, n)[0]
 
 
-@nb.njit
+@nb.njit(cache=True)
 def node_assignment_bipartite(edge_index: nb.int64[:,:],
                               edge_label: nb.int64[:],
                               primaries: nb.int64[:],
@@ -124,7 +195,7 @@ def node_assignment_bipartite(edge_index: nb.int64[:,:],
     return group_ids
 
 
-@nb.njit
+@nb.njit(cache=True)
 def primary_assignment(node_scores: nb.float32[:,:],
                        group_ids: nb.int64[:] = None) -> nb.boolean[:]:
     """
@@ -150,7 +221,7 @@ def primary_assignment(node_scores: nb.float32[:,:],
     return primary_labels
 
 
-@nb.njit
+@nb.njit(cache=True)
 def adjacency_matrix(edge_index: nb.int64[:,:],
                      n: nb.int64) -> nb.boolean[:,:]:
     """
@@ -169,7 +240,7 @@ def adjacency_matrix(edge_index: nb.int64[:,:],
     return adj_mat
 
 
-@nb.njit
+@nb.njit(cache=True)
 def grouping_loss(pred_mat: nb.float32[:],
                   target_mat: nb.boolean[:],
                   loss: str = 'ce') -> np.float32:
@@ -196,7 +267,7 @@ def grouping_loss(pred_mat: nb.float32[:],
         raise ValueError('Loss type not recognized')
 
 
-@nb.njit
+@nb.njit(cache=True)
 def edge_assignment_score(edge_index: nb.int64[:,:],
                           edge_scores: nb.float32[:,:],
                           n: nb.int64) -> (nb.int64[:,:], nb.float32):
@@ -259,7 +330,7 @@ def edge_assignment_score(edge_index: nb.int64[:,:],
     return best_index, best_groups, best_loss
 
 
-@nb.njit
+@nb.njit(cache=True)
 def node_assignment_score(edge_index: nb.int64[:,:],
                           edge_scores: nb.float32[:,:],
                           n: nb.int64) -> nb.int64[:]:
@@ -278,7 +349,7 @@ def node_assignment_score(edge_index: nb.int64[:,:],
     return edge_assignment_score(edge_index, edge_scores, n)[1]
 
 
-@nb.njit
+@nb.njit(cache=True)
 def cluster_to_voxel_label(clusts: nb.types.List(nb.int64[:]),
                            node_label: nb.int64[:]) -> nb.int64[:]:
     """
@@ -302,7 +373,7 @@ def cluster_to_voxel_label(clusts: nb.types.List(nb.int64[:]),
     return vlabel
 
 
-@nb.njit
+@nb.njit(cache=True)
 def node_purity_mask(clust_ids: nb.int64[:],
                      group_ids: nb.int64[:]) -> nb.boolean[:]:
     """
@@ -324,7 +395,7 @@ def node_purity_mask(clust_ids: nb.int64[:],
     return purity_mask
 
 
-@nb.njit
+@nb.njit(cache=True)
 def edge_purity_mask(edge_index: nb.int64[:,:],
                      clust_ids: nb.int64[:],
                      group_ids: nb.int64[:]) -> nb.boolean[:]:
@@ -352,7 +423,7 @@ def edge_purity_mask(edge_index: nb.int64[:,:],
     return purity_mask
 
 
-@nb.njit
+@nb.njit(cache=True)
 def relabel_groups(clust_ids: nb.int64[:],
                    true_group_ids: nb.int64[:],
                    pred_group_ids: nb.int64[:]) -> nb.int64[:]:

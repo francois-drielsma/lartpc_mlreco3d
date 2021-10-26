@@ -57,7 +57,7 @@ def numba_wrapper(cast_args=[], list_args=[], keep_torch=False, ref_arg=None):
     return outer
 
 
-@nb.njit
+@nb.njit(cache=True)
 def unique_nb(x: nb.int64[:]) -> (nb.int64[:], nb.int64[:]):
     b = np.sort(x.flatten())
     unique = list(b[:1])
@@ -71,7 +71,7 @@ def unique_nb(x: nb.int64[:]) -> (nb.int64[:], nb.int64[:]):
     return unique, counts
 
 
-@nb.njit
+@nb.njit(cache=True)
 def submatrix_nb(x:nb.float64[:,:],
                  index1: nb.int64[:],
                  index2: nb.int64[:]) -> nb.float64[:,:]:
@@ -85,7 +85,7 @@ def submatrix_nb(x:nb.float64[:,:],
     return subx
 
 
-@nb.njit
+@nb.njit(cache=True)
 def cdist_nb(x1: nb.float64[:,:],
              x2: nb.float64[:,:]) -> nb.float64[:,:]:
     """
@@ -98,7 +98,7 @@ def cdist_nb(x1: nb.float64[:,:],
     return res
 
 
-@nb.njit
+@nb.njit(cache=True)
 def mean_nb(x: nb.float64[:,:],
             axis: nb.int64) -> nb.float64[:]:
     """
@@ -115,7 +115,7 @@ def mean_nb(x: nb.float64[:,:],
     return mean
 
 
-@nb.njit
+@nb.njit(cache=True)
 def argmax_nb(x: nb.float64[:,:],
               axis: nb.int64) -> nb.int64[:]:
     """
@@ -132,7 +132,7 @@ def argmax_nb(x: nb.float64[:,:],
     return argmax
 
 
-@nb.njit
+@nb.njit(cache=True)
 def softmax_nb(x: nb.float64[:,:],
                axis: nb.int64) -> nb.float64[:,:]:
     assert axis == 0 or axis == 1
@@ -143,6 +143,28 @@ def softmax_nb(x: nb.float64[:,:],
         return exps/np.sum(exps,axis=1).reshape(-1,1)
 
 
-@nb.njit
+@nb.njit(cache=True)
 def log_loss_nb(x1: nb.boolean[:], x2: nb.float64[:]) -> nb.float64:
     return -(np.sum(np.log(x2[x1])) + np.sum(np.log(1.-x2[~x1])))/len(x1)
+
+
+def cdist_cuda(x1: nb.float64[:,:],
+               x2: nb.float64[:,:]) -> nb.float64[:,:]:
+    """
+    CUDA implementation of Eucleadian cdist in 3D.
+    """
+    import numba.cuda # Loads CUDA module of Numba, requires GPU
+    kernel = nb.cuda.jit(_cdist_kernel)
+    TPB = (16, 16)
+    BPG = (len(x1)//TPB[0]+1, len(x2)//TPB[1]+1)
+    res = np.empty((len(x1),len(x2)), dtype=x1.dtype)
+    kernel[BPG,TPB](x1, x2, res)
+    return res
+
+def _cdist_kernel(x1, x2, res):
+    """
+    CUDA Kernel for Eucleadian cdist in 3D.
+    """
+    i1, i2 = nb.cuda.grid(2)
+    if i1 < x1.shape[0] and i2 < x2.shape[0]:
+        res[i1,i2] = math.sqrt((x1[i1][0]-x2[i2][0])**2+(x1[i1][1]-x2[i2][1])**2+(x1[i1][2]-x2[i2][2])**2)
