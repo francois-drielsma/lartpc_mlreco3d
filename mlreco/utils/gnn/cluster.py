@@ -648,6 +648,8 @@ def cluster_direction(voxels: nb.float64[:,:],
             if i != len(voxels)-1:
                 meank = ((i+1)*meank+voxels[i+1])/(i+2)
                 covk = (i+1)*covk/(i+2) + (voxels[i+1]-meank).reshape(-1,1)*(voxels[i+1]-meank)/(i+1)
+            if i==9 and sum(labels)==0: 
+                return (voxels[i]-start)/np.linalg.norm(voxels[i]-start)
 
         # Subselect voxels that are most track-like
         max_id = np.argmax(labels)
