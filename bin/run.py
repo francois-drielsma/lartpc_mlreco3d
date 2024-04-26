@@ -66,7 +66,7 @@ if __name__ == '__main__':
             description="Runs the training/validation/inference/analysis")
     parser.add_argument('--config', '-c',
                         help='Path to the configuration file',
-                        type=str, nargs=1)
+                        type=str, nargs='?') # nargs=1 causes it to be a list. 
     parser.add_argument('--source', '-s', '-S',
                         help='Path or list of paths to data files',
                         type=str, nargs='+')
@@ -75,8 +75,10 @@ if __name__ == '__main__':
                         type=str, nargs='?')
     parser.add_argument('--detect_anomaly',
                         help='Turns on autograd.detect_anomaly for debugging',
-                        type=bool, action='store_const', const=True)
+                        action='store_true', default=False)
     args = parser.parse_args()
+    
+    print(args)
 
     # Execute the main function
     main(args.config, args.source, args.output, args.detect_anomaly)
