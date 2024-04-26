@@ -6,10 +6,10 @@ from warnings import warn
 
 from .node_class import NodeClassificationLoss
 
-from mlreco.models.layers.factories import loss_fn_construct
+from mlreco.models.layers.factories import loss_fn_factory
 
+from mlreco import TensorBatch, Meta
 from mlreco.utils.globals import PRINT_COL, VTX_COLS
-from mlreco.utils.data_structures import TensorBatch, Meta
 from mlreco.utils.geometry import Geometry
 from mlreco.utils.gnn.cluster import get_cluster_label_batch
 
@@ -89,7 +89,7 @@ class NodeVertexLoss(torch.nn.Module):
                 loss=primary_loss)
 
         # Initialize the regression loss
-        self.reg_loss_fn = loss_fn_construct(
+        self.reg_loss_fn = loss_fn_factory(
                 regression_loss, reduction='sum')
 
         # If containment is requested, intialize geometry

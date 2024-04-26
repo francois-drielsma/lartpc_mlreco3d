@@ -3,15 +3,15 @@
 They add/correct information stored in LArCV particles.
 """
 
-import numpy as np
-from typing import List
 from warnings import warn
 
-from .globals import (SHOWR_SHP, TRACK_SHP, MICHL_SHP, DELTA_SHP,
-                      INVAL_ID, INVAL_TID, PDG_TO_PID)
+import numpy as np
+
+from .globals import MICHL_SHP, DELTA_SHP, INVAL_ID, INVAL_TID, PDG_TO_PID
 
 
-def process_particles(particles, particles_mpv, neutrinos):
+def process_particles(particles, particle_event, particle_mpv_event=None,
+                      neutrino_event=None):
     """Process Particle object list to add/correct attributes in place.
 
     Does the following:
@@ -25,14 +25,71 @@ def process_particles(particles, particles_mpv, neutrinos):
     ----------
     particles : List[Particle]
         (P) List of true particle instances
-    particles_mpv : List[Particle], optional
+    particle_event : larcv.EventParticle
+        (P) List of true particle instances
+    particle_mpv_event : larcv.EventParticle, optional
         (M) List of true MPV particle instances
-    neutrinos : list(larcv.Neutrino), optional
+    neutrino_event : larcv.EventNeutrino, optional
         (N) List of true neutrino instances
     """
     # If the list is empty, there is nothing to do
-    if not len(particles):
+    if len(particles) == 0:
         return
+
+    # Get the additional attributes
+    (interaction_ids, nu_ids, group_primary_ids,
+     inter_primary_ids, pids) = process_particle_event(
+             particle_event, particle_mpv_event, neutrino_event)
+
+    # Update the particles objects in place
+    for i, p in enumerate(particles):
+        p.interaction_id = interaction_ids[i]
+        p.nu_id = nu_ids[i]
+        p.group_primary = group_primary_ids[i]
+        p.interaction_primary = inter_primary_ids[i]
+        p.pid = pids[i]
+
+
+def process_particle_event(particle_event, particle_mpv_event=None,
+                           neutrino_event=None):
+    """Corrects/fetches attributes for a larcv.EventParticle object.
+
+    Does the following:
+    - Builds the interaction ID information if it is not provided
+    - Gets the true neutrino ID this particle came from
+    - Gets a simplified enumerated particle species ID
+    - Gets a flag as to whether a particle is a primary within its interaction
+    - Gets a flag as to whether a particle is a primary within its group
+
+    Parameters
+    ----------
+    particle_event : larcv.EventParticle
+        (P) List of true particle instances
+    particle_mpv_event : larcv.EventParticle, optional
+        (M) List of true MPV particle instances
+    neutrino_event : larcv.EventNeutrino, optional
+        (N) List of true neutrino instances
+
+    Returns
+    -------
+    interaction_ids : np.ndarray
+        (P) List of interaction IDs, one per true particle instance
+    nu_ids : np.ndarray
+        (P) List of neutrino IDs, one per true particle instance
+    group_primary_ids : np.ndarray
+        (P) List of particle group primary IDs, one per true particle instance
+    inter_primary_ids : np.ndarray
+        (P) List of particle primary IDs, one per true particle instance
+    pids : np.ndarray
+        (P) List of particle IDs, one per true particle instance
+    """
+    # Converts the input to simple python lists of objects
+    particles = list(particle_event.as_vector())
+    particles_mpv, neutrinos = None, None
+    if particle_mpv_event is not None:
+        particles_mpv = list(particle_mpv_event.as_vector())
+    if neutrino_event is not None:
+        neutrinos = list(neutrino_event.as_vector())
 
     # Get the mask of valid particle labels
     valid_mask = get_valid_mask(particles)
@@ -52,13 +109,8 @@ def process_particles(particles, particles_mpv, neutrinos):
     # Get the particle species (PID) of each particle
     pids = get_particle_ids(particles, valid_mask)
 
-    # Update the particles objects in place
-    for i, p in enumerate(particles):
-        p.interaction_id = interaction_ids[i]
-        p.nu_id = nu_ids[i]
-        p.group_primary = group_primary_ids[i]
-        p.interaction_primary = inter_primary_ids[i]
-        p.pid = pids[i]
+    # Return
+    return interaction_ids, nu_ids, group_primary_ids, inter_primary_ids, pids
 
 
 def get_valid_mask(particles):
@@ -70,7 +122,7 @@ def get_valid_mask(particles):
 
     Parameters
     ----------
-    particles : List[Particle]
+    particles : List[larcv.Particle]
         (P) List of true particle instances
 
     Results
@@ -79,22 +131,22 @@ def get_valid_mask(particles):
         (P) Boolean list of validity, one per true particle instance
     """
     # If there are no particles, nothing to do here
-    if not len(particles):
+    if len(particles) == 0:
         return np.empty(0, dtype=bool)
 
     # If the interaction IDs are set in the particle tree, simply use that
-    inter_ids = np.array([p.interaction_id for p in particles], dtype=int)
+    inter_ids = np.array([p.interaction_id() for p in particles], dtype=int)
     if np.any(inter_ids != INVAL_ID):
         return inter_ids != INVAL_ID
 
     # Otherwise, check that the ancestor track ID and creation process are valid
-    mask  = np.array([p.ancestor_track_id != INVAL_TID for p in particles])
-    mask &= np.array([bool(p.ancestor_creation_process) for p in particles])
+    mask  = np.array([p.ancestor_track_id() != INVAL_TID for p in particles])
+    mask &= np.array([bool(p.ancestor_creation_process()) for p in particles])
 
     return mask
 
 
-def get_interaction_ids(particles, valid_mask):
+def get_interaction_ids(particles, valid_mask=None):
     """Gets the interaction ID of each particle.
 
     If the `interaction_id` attribute of the Particle class is filled,
@@ -106,9 +158,9 @@ def get_interaction_ids(particles, valid_mask):
 
     Parameters
     ----------
-    particles : List[Particle]
+    particles : List[larcv.Particle]
         (P) List of true particle instances
-    valid_mask : np.ndarray
+    valid_mask : np.ndarray, optional
         (P) Particle label validity mask
 
     Results
@@ -117,22 +169,26 @@ def get_interaction_ids(particles, valid_mask):
         (P) List of interaction IDs, one per true particle instance
     """
     # If there are no particles, nothing to do here
-    if not len(particles):
+    if len(particles) == 0:
         return np.empty(0, dtype=int)
 
+    # Compute the validity mask if it is not provided
+    if valid_mask is None:
+        valid_mask = get_valid_mask(particles)
+
     # If the interaction IDs are set in the particle tree, simply use that
-    inter_ids = np.array([p.interaction_id for p in particles], dtype=int)
+    inter_ids = np.array([p.interaction_id() for p in particles], dtype=int)
     if np.any(inter_ids != INVAL_ID):
-        inter_ids[~valid_mask] = -1
+        inter_ids[~valid_mask] = -1 # pylint: disable=E1130
         return inter_ids
 
     # Otherwise, define interaction IDs on the basis of sharing
     # an ancestor vertex position
-    anc_pos = np.vstack([p.ancestor_position for p in particles])
+    anc_pos = np.vstack([get_coords(p.ancestor_position()) for p in particles])
     inter_ids = np.unique(anc_pos, axis=0, return_inverse=True)[-1]
 
     # Now set the interaction ID of particles with an undefined ancestor to -1
-    inter_ids[~valid_mask] = -1
+    inter_ids[~valid_mask] = -1 # pylint: disable=E1130
 
     return inter_ids
 
@@ -152,11 +208,11 @@ def get_nu_ids(particles, inter_ids, particles_mpv=None, neutrinos=None):
 
     Parameters
     ----------
-    particles : List[Particle]
+    particles : List[larcv.Particle]
         (P) List of true particle instances
     inter_ids : np.ndarray
         (P) Array of interaction ID values, one per true particle instance
-    particles_mpv : List[Particle], optional
+    particles_mpv : List[larcv.Particle], optional
         (M) List of true MPV particle instances
     neutrinos : list(larcv.Neutrino), optional
         (N) List of true neutrino instances
@@ -164,10 +220,10 @@ def get_nu_ids(particles, inter_ids, particles_mpv=None, neutrinos=None):
     Results
     -------
     np.ndarray
-        List of neutrino IDs, one per true particle instance
+        (P) List of neutrino IDs, one per true particle instance
     """
     # If there are no particles, nothing to do here
-    if not len(particles):
+    if len(particles) == 0:
         return np.empty(0, dtype=int)
 
     # Make sure there is only either MPV particles or neutrinos specified, not both
@@ -182,13 +238,14 @@ def get_nu_ids(particles, inter_ids, particles_mpv=None, neutrinos=None):
         warn("Neutrino IDs are being produced on the basis of interaction "
              "multiplicity (i.e. neutrino if >= 2 primaries). This is "
              "not an exact method and might lead to unexpected results.")
-             
+
         # Loop over the interactions
         primary_ids = get_inter_primary_ids(particles, inter_ids > -1)
         nu_id = 0
         for i in np.unique(inter_ids):
             # If the interaction ID is invalid, skip
-            if i < 0: continue
+            if i < 0:
+                continue
 
             # If there are at least two primaries, the interaction is nu-like
             inter_index = np.where(inter_ids == i)[0]
@@ -199,19 +256,25 @@ def get_nu_ids(particles, inter_ids, particles_mpv=None, neutrinos=None):
         # Find the reference positions to gauge if a particle comes from a
         # nu-like interaction
         ref_pos = None
-        if particles_mpv and len(particles_mpv):
-            ref_pos = np.vstack([p.position for p in particles_mpv])
+        if particles_mpv and len(particles_mpv) > 0:
+            ref_pos = np.vstack(
+                    [get_coords(p.position()) for p in particles_mpv])
             ref_pos = np.unique(ref_pos, axis=0)
-        elif neutrinos and len(neutrinos):
-            ref_pos = np.vstack([n.position for n in neutrinos])
+        elif neutrinos and len(neutrinos) > 0:
+            ref_pos = np.vstack([get_coords(n.position()) for n in neutrinos])
 
         # If any particle in an interaction shares its ancestor position with
         # an MPV particle or a neutrino, the whole interaction is a
         # nu-like interaction.
         if ref_pos is not None:
-            anc_pos = np.vstack([p.ancestor_position for p in particles])
+            anc_pos = np.vstack(
+                    [get_coords(p.ancestor_position()) for p in particles])
             for i in np.unique(inter_ids):
-                if i < 0: continue
+                # If the interaction is invalid, skip
+                if i < 0:
+                    continue
+
+                # Loop over positions in the interaction find a reference match
                 inter_index = np.where(inter_ids == i)[0]
                 for ref_id, pos in enumerate(ref_pos):
                     if np.any((anc_pos[inter_index] == pos).all(axis=1)):
@@ -221,7 +284,6 @@ def get_nu_ids(particles, inter_ids, particles_mpv=None, neutrinos=None):
     return nu_ids
 
 
-
 def get_group_primary_ids(particles, valid_mask):
     """Gets the group primary status of particle fragments.
 
@@ -229,9 +291,9 @@ def get_group_primary_ids(particles, valid_mask):
 
     Parameters
     ----------
-    particles : List[Particle]
+    particles : List[larcv.Particle]
         (P) List of true particle instances
-    valid_mask : np.ndarray
+    valid_mask : np.ndarray, optional
         (P) Particle label validity mask
 
     Results
@@ -239,29 +301,40 @@ def get_group_primary_ids(particles, valid_mask):
     np.ndarray
         (P) List of particle group primary IDs, one per true particle instance
     """
+    # Compute the validity mask if it is not provided
+    if valid_mask is None:
+        valid_mask = get_valid_mask(particles)
+
     # Loop over the list of particle groups
     primary_ids = np.zeros(len(particles), dtype=int)
-    group_ids   = np.array([p.group_id for p in particles], dtype=int)
-    for g in np.unique(group_ids):
+    group_ids   = np.array([p.group_id() for p in particles], dtype=int)
+    for group_id in np.unique(group_ids):
+        # Check that the group ID is within the expected range
+        group_index = np.where(group_ids == group_id)[0]
+        if group_id != INVAL_ID and group_id > len(particles) - 1:
+            warn(f"Bad group ID ({group_id}) not matching INVAL_ID "
+                 f"({INVAL_ID}). This may happen for old files.")
+            primary_ids[group_index] = -1
+            continue
+
         # If the particle group has invalid labeling, the concept of group
         # primary is ill-defined
-        p = particles[g]
-        group_index = np.where(group_ids == g)[0]
-        if g == INVAL_ID or not valid_mask[g]:
+        if group_id == INVAL_ID or not valid_mask[group_id]:
             primary_ids[group_index] = -1
             continue
 
         # If a group originates from a Delta or a Michel, it has a primary
-        if p.shape == MICHL_SHP or p.shape == DELTA_SHP:
-            primary_ids[g] = 1
+        group_p = particles[group_id]
+        if group_p.shape() == MICHL_SHP or group_p.shape() == DELTA_SHP:
+            primary_ids[group_id] = 1
             continue
 
         # If a particle group's parent fragment is the first in time,
         # it is a valid primary. TODO: use first step time.
-        clust_times = np.array([particles[i].t for i in group_index])
+        clust_times = np.array([particles[i].t() for i in group_index])
         min_id = np.argmin(clust_times)
-        if group_index[min_id] == g:
-            primary_ids[g] = 1
+        if group_index[min_id] == group_id:
+            primary_ids[group_id] = 1
 
     return primary_ids
 
@@ -271,9 +344,9 @@ def get_inter_primary_ids(particles, valid_mask):
 
     Parameters
     ----------
-    particles : List[Particle]
+    particles : List[larcv.Particle]
         (P) List of true particle instances
-    valid_mask : np.ndarray
+    valid_mask : np.ndarray, optional
         (P) Particle label validity mask
 
     Results
@@ -281,30 +354,43 @@ def get_inter_primary_ids(particles, valid_mask):
     np.ndarray
         (P) List of particle primary IDs, one per true particle instance
     """
+    # Compute the validity mask if it is not provided
+    if valid_mask is None:
+        valid_mask = get_valid_mask(particles)
+
     # Loop over the list of particles
     primary_ids = -np.ones(len(particles), dtype=int)
     for i, p in enumerate(particles):
         # If the particle has invalid labeling, it has invalid primary status
-        if p.group_id == INVAL_ID or not valid_mask[i]:
+        group_id = p.group_id()
+        if group_id == INVAL_ID or not valid_mask[i]:
+            continue
+
+        # Check that the group ID is within the expected range
+        if group_id > len(particles) - 1:
+            warn(f"Bad group ID ({group_id}) not matching INVAL_ID "
+                 f"({INVAL_ID}). This may happen for old files.")
             continue
 
         # If the particle originates from a primary pi0, label as primary
         # Small issue with photo-nuclear activity here, but very rare
-        group_p = particles[p.group_id]
-        if group_p.ancestor_pdg_code == 111:
+        group_p = particles[group_id]
+        if group_p.ancestor_pdg_code() == 111:
             primary_ids[i] = 1
             continue
 
         # If the origin of a particle agrees with the origin of its ancestor,
         # label as primary
-        primary_ids[i] = (group_p.position == p.ancestor_position).all()
+        group_position = get_coords(group_p.position())
+        ancestor_position = get_coords(p.ancestor_position())
+        primary_ids[i] = (group_position == ancestor_position).all()
 
     return primary_ids
 
 
 def get_particle_ids(particles, valid_mask):
     """Gets a particle species ID (PID) for each particle.
-    
+
     This function ensures:
     - All shower daughters are labeled the same as their primary. This
       makes sense as otherwise an electron primary gets overruled by
@@ -318,7 +404,7 @@ def get_particle_ids(particles, valid_mask):
     ----------
     particles : List[Particle]
         (P) List of true particle instances
-    valid_mask : np.ndarray
+    valid_mask : np.ndarray, optional
         (P) Particle label validity mask
 
     Returns
@@ -326,15 +412,43 @@ def get_particle_ids(particles, valid_mask):
     np.ndarray
         (P) List of particle IDs, one per true particle instance
     """
+    # Compute the validity mask if it is not provided
+    if valid_mask is None:
+        valid_mask = get_valid_mask(particles)
+
+    # Loop over the list of particles
     particle_ids = -np.ones(len(particles), dtype=int)
-    for i in range(len(particle_ids)):
+    for i, p in enumerate(particles):
         # If the primary ID is invalid, skip
-        if not valid_mask[i]: continue
+        group_id = p.group_id()
+        if group_id == INVAL_ID or not valid_mask[i]:
+            continue
+
+        # Check that the group ID is within the expected range
+        if group_id > len(particles) - 1:
+            warn(f"Bad group ID ({group_id}) not matching INVAL_ID "
+                 f"({INVAL_ID}). This may happen for old files.")
+            continue
 
         # If the particle type exists in the predefined list, assign
-        group_id = particles[i].group_id
-        t = particles[group_id].pdg_code
+        t = particles[group_id].pdg_code()
         if t in PDG_TO_PID.keys():
             particle_ids[i] = PDG_TO_PID[t]
 
     return particle_ids
+
+
+def get_coords(position):
+    """Gets the coordinates of a larcv.Vertex object.
+
+    Parameters
+    ----------
+    position : larcv.Vertex
+        Encodes the position of a point with attributes x, y, z and t
+
+    Returns
+    -------
+    List[float]
+        Coordinates of the point (x, y, z)
+    """
+    return np.array([getattr(position, a)() for a in ['x', 'y', 'z']])

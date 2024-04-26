@@ -3,16 +3,17 @@
 Collate classes are a middleware between parsers and datasets. They are given
 to :class:`torch.utils.data.DataLoader` as the `collate_fn` argumement.
 """
+
 import numpy as np
 
+from mlreco import TensorBatch, IndexBatch, EdgeIndexBatch
 from mlreco.utils.geometry import Geometry
-from mlreco.utils.data_structures import TensorBatch, IndexBatch, EdgeIndexBatch
 
-__all__ = ['CollateSparse']
+__all__ = ['CollateAll']
 
 
-class CollateSparse:
-    """Collates sparse data from each event in the batch into a single object
+class CollateAll:
+    """General collate function for all data types coming from the parsers.
 
     Provide it with a list of dictionaries, each of which maps keys to one of:
     1. Tuple of (voxel tensor, feature tensor, metadata) which get merged
@@ -21,12 +22,11 @@ class CollateSparse:
        rows [batch_id, *features]
     3. Scalars/list/objects which simply get put in a single list
     """
-    name = 'sparse'
+    name = 'all'
 
     def __init__(self, split=False, target_id=0, detector=None,
                  boundary=None, overlay=None):
-        """
-        Initialize the parameters needed to collate sparse tensors
+        """Initialize the collation parameters.
 
         Parameters
         ----------
@@ -54,7 +54,7 @@ class CollateSparse:
         if overlay is not None:
             self.process_overlay_config(**overlay)
 
-    def process_overlay(self, mode='const', size=2):
+    def process_overlay_config(self, mode='const', size=2):
         """Process the image overlay configuration
 
         Parameters
@@ -109,15 +109,18 @@ class CollateSparse:
                     # If split, must shift the voxel coordinates and create
                     # one batch ID per [batch, volume] pair
                     voxels_v, features_v, batch_ids_v = [], [], []
-                    counts = np.empty(batch_size, dtype=np.int64)
+                    counts = np.empty(
+                            batch_size*self.geo.num_modules, dtype=np.int64)
                     for s, sample in enumerate(batch):
                         voxels, features, meta = sample[key]
-                        voxels, module_indexes = self.geo.split(voxels,
-                                self.target_id, meta = meta)
+                        voxels_wrapped, module_indexes = self.geo.split(
+                                voxels.reshape(-1, 3),
+                                self.target_id, meta=meta)
+                        voxels = voxels_wrapped.reshape(-1, voxels.shape[1])
                         for m, module_index in enumerate(module_indexes):
                             voxels_v.append(voxels[module_index])
                             features_v.append(features[module_index])
-                            idx = self.geo_num_modules * s + m
+                            idx = self.geo.num_modules * s + m
                             batch_ids_v.append(np.full(len(module_index),
                                                idx, dtype = np.int32))
                             counts[idx] = len(module_index)
@@ -128,14 +131,16 @@ class CollateSparse:
 
                 # Stack the coordinates with the features
                 tensor = np.hstack([batch_ids[:, None], voxels, features])
-                data[key] = TensorBatch(tensor, counts)
+                coord_cols = np.arange(1, 1+voxels.shape[1])
+                data[key] = TensorBatch(tensor, counts, has_batch_col=True,
+                                        coord_cols=coord_cols)
 
             elif isinstance(ref_obj, tuple) and len(ref_obj) == 2:
                 # Case where an index and an offset is provided per entry.
                 # Stack the indexes, do not add a batch column
                 tensor  = np.concatenate(
-                        [sample[key][0] for sample in batch], axis-1)
-                counts  = [len(sample[key][0]) for sample in batch]
+                        [sample[key][0] for sample in batch], axis=1)
+                counts  = [sample[key][0].shape[-1] for sample in batch]
                 offsets = [sample[key][1] for sample in batch]
                 if len(tensor.shape) == 1:
                     data[key] = IndexBatch(tensor, counts, offsets)

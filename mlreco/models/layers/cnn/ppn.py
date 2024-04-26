@@ -7,15 +7,15 @@ import MinkowskiEngine as ME
 import MinkowskiFunctional as MF
 
 from .configuration import setup_cnn_configuration
-from .act_norm import activations_construct
+from .act_norm import act_factory
 from .blocks import ResNetBlock, SPP, ASPP
 
+from mlreco import TensorBatch
 from mlreco.utils.torch_local import local_cdist
 from mlreco.utils.logger import logger
 from mlreco.utils.globals import (COORD_COLS, VALUE_COL, SHAPE_COL, TRACK_SHP,
                                   GHOST_SHP, PPN_ROFF_COLS, PPN_RPOS_COLS,
                                   PPN_RTYPE_COLS, PPN_LTYPE_COL, PPN_LENDP_COL)
-from mlreco.utils.data_structures import TensorBatch
 from mlreco.utils.weighting import get_class_weights
 
 __all__ = ['PPN', 'PPNLoss']
@@ -170,7 +170,7 @@ class PPN(torch.nn.Module):
         for i in range(self.depth-2, -1, -1):
             m = []
             m.append(ME.MinkowskiBatchNorm(self.num_planes[i+1]))
-            m.append(activations_construct(self.act_cfg))
+            m.append(act_factory(self.act_cfg))
             m.append(ME.MinkowskiConvolutionTranspose(
                 in_channels=self.num_planes[i+1],
                 out_channels=self.num_planes[i],
@@ -220,7 +220,7 @@ class PPN(torch.nn.Module):
             self.ghost_mask = MinkGhostMask(self.dim)
 
     def forward(self, final_tensor, decoder_tensors, ghost=None,
-                segment_label=None):
+                seg_label=None):
         """Compute the PPN loss for a batch of data.
 
         The PPN loss comprises three components:
@@ -236,7 +236,7 @@ class PPN(torch.nn.Module):
             Feature tensors of each of the decoding blocks
         ghost : TensorBatch, optional
             Logits of the ghost predictions of the backbone UResNet
-        segment_label : TensorBatch, optional
+        seg_label : TensorBatch, optional
             Segmentation label tensor
 
         Returns
@@ -252,11 +252,11 @@ class PPN(torch.nn.Module):
             with torch.no_grad():
                 if self.use_true_ghost_mask:
                     # If using the true ghost mask, use the label tensor
-                    assert segment_label is not None, (
+                    assert seg_label is not None, (
                             "If `use_true_ghost_mask` is set to `True`, must "
-                            "provide the `segment_label` tensor.")
+                            "provide the `seg_label` tensor.")
 
-                    labels = segment_label.tensor
+                    labels = seg_label.tensor
                     assert (labels.shape[0] == 
                             decoder_tensors[-1].tensor.shape[0]), (
                                     "The label tensor length must match that "
@@ -306,7 +306,7 @@ class PPN(torch.nn.Module):
 
             # Store the coordinates, raw score logits and score mask
             counts = decoder_tensors[i].counts
-            ppn_coords.append(TensorBatch(scores.C, counts))
+            ppn_coords.append(TensorBatch(scores.C, counts, has_batch_col=True))
             ppn_layers.append(TensorBatch(scores.F, counts))
             ppn_masks.append(TensorBatch(mask, counts))
 
@@ -323,7 +323,7 @@ class PPN(torch.nn.Module):
                 "The output of the last PPN layer should be consistent "
                 "with the length of the last UResNet decoder layer")
         final_counts = decoder_tensors[-1].counts
-        ppn_output_coords = TensorBatch(x.C, final_counts)
+        ppn_output_coords = TensorBatch(x.C, final_counts, has_batch_col=True)
 
         # Pass the final PPN tensor through the individual predictions, combine
         x = self.final_block(x)

@@ -9,19 +9,18 @@ Contains the following parsers:
 - :class:`TriggerParser`
 """
 
-import numpy as np
-from larcv import larcv
 
-from mlreco.utils.data_structures import (
-        Meta, RunInfo, Flash, CRTHit, Trigger, ObjectList)
+from mlreco import Meta, RunInfo, Flash, CRTHit, Trigger, ObjectList
 
-from .parser import Parser
+from mlreco.utils.conditional import larcv
 
-__all__ = ['MetaParser', 'RunInfoParser', 'OpFlashParser',
+from .base import ParserBase
+
+__all__ = ['MetaParser', 'RunInfoParser', 'FlashParser',
            'CRTHitParser', 'TriggerParser']
 
 
-class MetaParser(Parser):
+class MetaParser(ParserBase):
     """Get the metadata information to translate into real world coordinates.
 
     Each entry in a dataset is a cube, where pixel/voxel coordinates typically
@@ -38,6 +37,16 @@ class MetaParser(Parser):
     """
     name = 'parse_meta'
     aliases = ['parse_meta2d', 'parse_meta3d']
+
+    def __call__(self, trees):
+        """Parse one entry.
+
+        Parameters
+        ----------
+        trees : dict
+            Dictionary which maps each data product name to a LArCV object
+        """
+        return self.process(**self.get_input_data(trees))
 
     def __init__(self, projection_id=None, **kwargs):
         """Initialize the parser.
@@ -85,7 +94,7 @@ class MetaParser(Parser):
         return Meta.from_larcv(ref_event.meta())
 
 
-class RunInfoParser(Parser):
+class RunInfoParser(ParserBase):
     """Parse run information (run, subrun, event number).
 
     .. code-block. yaml
@@ -96,6 +105,16 @@ class RunInfoParser(Parser):
             sparse_event: sparse3d_pcluster
     """
     name = 'parse_run_info'
+
+    def __call__(self, trees):
+        """Parse one entry.
+
+        Parameters
+        ----------
+        trees : dict
+            Dictionary which maps each data product name to a LArCV object
+        """
+        return self.process(**self.get_input_data(trees))
 
     def process(self, sparse_event=None, cluster_event=None):
         """Fetches the run information from one object that has it.
@@ -122,27 +141,37 @@ class RunInfoParser(Parser):
         return RunInfo.from_larcv(ref_event)
 
 
-class OpFlashParser(Parser):
-    """Copy construct OpFlash and return an array of `Flash`.
+class FlashParser(ParserBase):
+    """Copy construct Flash and return an array of `Flash`.
 
     .. code-block. yaml
         schema:
-          opflash_cryoE:
-            parser:parse_opflash
-            opflash_event: opflash_cryoE
+          flashes_cryoE:
+            parser: parse_flash
+            flash_event: flash_cryoE
 
     """
-    name = 'parse_opflashes'
-    aliases = ['parse_opflash']
+    name = 'parse_flashes'
+    aliases = ['parse_opflash', 'parse_opflashes']
 
-    def process(self, opflash_event=None, opflash_event_list=None):
+    def __call__(self, trees):
+        """Parse one entry.
+
+        Parameters
+        ----------
+        trees : dict
+            Dictionary which maps each data product name to a LArCV object
+        """
+        return self.process(**self.get_input_data(trees))
+
+    def process(self, flash_event=None, flash_event_list=None):
         """Fetches the list of optical flashes.
 
         Parameters
         -------------
-        opflash_event : larcv.EventFlash, optional
+        flash_event : larcv.EventFlash, optional
             Optical flash event which contains a list of flash objects
-        opflash_event_list : larcv.EventFlash, optional
+        flash_event_list : List[larcv.EventFlash], optional
             List of optical flash events, each a list of flash objects
 
         Returns
@@ -151,23 +180,23 @@ class OpFlashParser(Parser):
             List of optical flash objects
         """
         # Check on the input, aggregate the sources for the optical flashes
-        assert ((opflash_event is not None) ^
-                (opflash_event_list is not None)), (
-                "Must specify either `opflash_event` or `opflash_event_list`")
-        if opflash_event is not None:
-            opflash_list = opflash_event.as_vector()
+        assert ((flash_event is not None) ^
+                (flash_event_list is not None)), (
+                "Must specify either `flash_event` or `flash_event_list`")
+        if flash_event is not None:
+            flash_list = flash_event.as_vector()
         else:
-            opflash_list = []
-            for opflash_event in opflash_event_list:
-                opflash_list.extend(opflash_event.as_vector())
+            flash_list = []
+            for flash_event in flash_event_list:
+                flash_list.extend(flash_event.as_vector())
 
         # Output as a list of LArCV optical flash objects
-        opflashes = [Flash.from_larcv(larcv.Flash(f)) for f in opflash_list]
+        flashes = [Flash.from_larcv(larcv.Flash(f)) for f in flash_list]
 
-        return ObjectList(opflashes, Flash)
+        return ObjectList(flashes, Flash())
 
 
-class CRTHitParser(Parser):
+class CRTHitParser(ParserBase):
     """Copy construct CRTHit and return an array of `CRTHit`.
 
     .. code-block. yaml
@@ -178,6 +207,16 @@ class CRTHitParser(Parser):
     """
     name = 'parse_crthits'
     aliases = ['parse_crthit']
+
+    def __call__(self, trees):
+        """Parse one entry.
+
+        Parameters
+        ----------
+        trees : dict
+            Dictionary which maps each data product name to a LArCV object
+        """
+        return self.process(**self.get_input_data(trees))
 
     def process(self, crthit_event):
         """Fetches the list of CRT hits.
@@ -195,10 +234,10 @@ class CRTHitParser(Parser):
         crthit_list = crthit_event.as_vector()
         crthits = [CRTHit.from_larcv(larcv.CRTHit(c)) for c in crthit_list]
 
-        return ObjectList(crthits, CRTHit)
+        return ObjectList(crthits, CRTHit())
 
 
-class TriggerParser(Parser):
+class TriggerParser(ParserBase):
     """Copy construct Trigger and return a `Trigger`.
 
     .. code-block. yaml
@@ -208,6 +247,16 @@ class TriggerParser(Parser):
             trigger_event: trigger_base
     """
     name = 'parse_trigger'
+
+    def __call__(self, trees):
+        """Parse one entry.
+
+        Parameters
+        ----------
+        trees : dict
+            Dictionary which maps each data product name to a LArCV object
+        """
+        return self.process(**self.get_input_data(trees))
 
     def process(self, trigger_event):
         """Fetches the trigger information.

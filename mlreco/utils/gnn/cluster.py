@@ -9,12 +9,12 @@ import numba as nb
 import torch
 from typing import List
 
-import mlreco.utils.numba_local as nbl
+from mlreco import TensorBatch, IndexBatch
 from mlreco.utils.decorators import numbafy
-from mlreco.utils.data_structures import TensorBatch, IndexBatch
 from mlreco.utils.globals import (
         BATCH_COL, COORD_COLS, VALUE_COL, CLUST_COL, PART_COL, GROUP_COL,
         MOM_COL, SHAPE_COL, COORD_START_COLS, COORD_END_COLS, COORD_TIME_COL)
+import mlreco.utils.numba_local as nbl
 
 
 def form_clusters_batch(data, min_size=-1, column=CLUST_COL,
@@ -38,7 +38,7 @@ def form_clusters_batch(data, min_size=-1, column=CLUST_COL,
         Object used to index clusters within a batch of data
     """
     # Loop over the individual entries
-    clusts, counts, full_counts, offsets = [], [], [], [0]
+    clusts, counts, single_counts, offsets = [], [], [], [0]
     for b in range(data.batch_size):
         # Get the list of clusters and cluster sizes within this entry
         data_b = data[b]
@@ -52,7 +52,7 @@ def form_clusters_batch(data, min_size=-1, column=CLUST_COL,
         # Append
         clusts.extend(clusts_b)
         counts.append(len(counts_b))
-        full_counts.append(np.sum(counts_b))
+        single_counts.extend(counts_b)
         if b < (data.batch_size - 1):
             offsets.append(offsets[-1] + len(data_b))
 
@@ -142,7 +142,7 @@ def get_cluster_points_label_batch(data, coord_label, clusts,
         points[lower:upper] = get_cluster_points_label(
                 data[b], coord_label[b], clusts[b], random_order)
 
-    return TensorBatch(points, clusts.counts)
+    return TensorBatch(points, clusts.counts, coord_cols=points.shape[1])
 
 
 def get_cluster_directions_batch(data, starts, clusts,
@@ -1031,7 +1031,7 @@ def cluster_end_points(voxels: nb.float64[:,:]) -> (
 
 @nb.njit(cache=True)
 def umbrella_curv(voxels: nb.float64[:,:],
-                  voxid: nb.int64) -> nb.float64:
+                  vox_id: nb.int64) -> nb.float64:
     """Computes the umbrella curvature as in equation 9 of "Umbrella Curvature:
     A New Curvature Estimation Method for Point Clouds" by A.Foorginejad and
     K.Khalili
@@ -1052,11 +1052,14 @@ def umbrella_curv(voxels: nb.float64[:,:],
     # Find the mean direction from that point
     refvox = voxels[vox_id]
     diffs = voxels - refvox
-    axis = nbl.mean(voxels - refvox, axis=1)
-    axis /= np.linalg.norm(axis, axis=1)
+    axis = nbl.mean(voxels - refvox, axis=0)
+    axis /= np.linalg.norm(axis)
 
     # Compute the dot product of every displacement vector w.r.t. the axis
-    dots = np.dot(diffs/nbl.norm(diffs, axis=1), axis)
+    dots = np.zeros(len(diffs), dtype=diffs.dtype)
+    for i, diff in enumerate(diffs):
+        if i != vox_id:
+            dots[i] = np.dot(diff/np.linalg.norm(diff), axis)
 
     # Find the umbrella curvature (mean angle from the mean direction)
     return abs(np.mean(dots))

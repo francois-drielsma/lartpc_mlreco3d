@@ -1,10 +1,5 @@
 """Contains dataset classes to be used by the model."""
 
-import os
-import glob
-import inspect
-import numpy as np
-
 from torch.utils.data import Dataset
 
 from mlreco.utils.factory import module_dict, instantiate
@@ -31,7 +26,7 @@ class LArCVDataset(Dataset):
     This class utilizes the :class:`LArCVReader` class. It uses it to
     load data and to push it through the parsers.
     """
-    name = 'larcv_dataset'
+    name = 'larcv'
 
     def __init__(self, schema, **kwargs):
         """Instantiates the LArCVDataset.
@@ -90,18 +85,17 @@ class LArCVDataset(Dataset):
         # Read in a specific entry
         data_dict = self.reader[idx]
 
+        # Get the index
+        entry_idx = self.reader.entry_index[idx]
+        result = {'index': entry_idx}
+
         # Loop over data products, execute parsers
-        result = {}
         for name, parser in self.parsers.items():
             try:
                 result[name] = parser(data_dict)
             except Exception as err:
                 print(f"Failed to produce {name} using {parser}")
                 raise err
-
-        # Append the index
-        entry_idx = self.reader.entry_index[idx]
-        result['index'] = entry_idx
 
         return result
 
@@ -117,7 +111,8 @@ class LArCVDataset(Dataset):
 
     @staticmethod
     def list_data(file_path):
-        """Dumps top-level information about the contents of a LArCV root file.
+        """Dumps top-level information about the contents of the LArCV root
+        file.
         
         Parameters
         ----------
@@ -129,4 +124,4 @@ class LArCVDataset(Dataset):
         dict
             Dictionary which maps data types onto a list of keys
         """
-        return self.reader.list_data(file_path)
+        return LArCVReader.list_data(file_path)

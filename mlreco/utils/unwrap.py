@@ -4,8 +4,12 @@ import numpy as np
 from dataclasses import dataclass
 from copy import deepcopy
 
-from .data_structures import TensorBatch, IndexBatch, EdgeIndexBatch
+from mlreco import TensorBatch, IndexBatch, EdgeIndexBatch, ObjectList
+
+from .globals import BATCH_COL
 from .geometry import Geometry
+
+__all__ = ['Unwrapper']
 
 
 class Unwrapper:
@@ -74,10 +78,10 @@ class Unwrapper:
                 "Batch has length 0, should not happen.")
 
         # Dispatch to the correct unwrapping scheme
-        if (np.isscalar(data) or                                                                                                            
+        if (np.isscalar(data) or 
             (isinstance(data, list) and not isinstance(data[0], TensorBatch))):
-            # If there is a single scalar for the entire batch or a list
-            # of scalars (one per entry), return as is
+            # If there is a single scalar for the entire batch or a simple list
+            # of objects (one per entry), return as is
             return data
 
         elif isinstance(data, TensorBatch):
@@ -88,7 +92,8 @@ class Unwrapper:
             # If the data is a tensor list, split each between its constituents
             data_split = [self._unwrap_tensor(t) for t in data]
             tensor_lists = []
-            for b in range(self.batch_size):
+            batch_size = data[0].batch_size//self.num_volumes
+            for b in range(batch_size):
                 tensor_lists.append([l[b] for l in data_split])
 
             return tensor_lists
@@ -111,11 +116,11 @@ class Unwrapper:
         """
         # If there is one volume, trivial
         if self.num_volumes == 1:
-            if not self.remove_batch_col or data.batch_col is None:
+            if not self.remove_batch_col or not data.has_batch_col:
                 return data.split()
             else:
                 data_nobc = TensorBatch(
-                        data.tensor[:, data.batch_col+1:], data.counts)
+                        data.tensor[:, BATCH_COL+1:], data.counts)
                 return data_nobc.split()
 
         # Otherwise, must shift coordinates back
@@ -126,11 +131,11 @@ class Unwrapper:
                 idx = b*self.num_volumes + v
                 tensor = data[idx]
                 if v > 0 and data.coord_cols is not None:
-                    for cols in data.coord_cols:
+                    for cols in data.coord_cols.reshape(-1, 3):
                         tensor[:, cols] = self.geo.translate(
                                 tensor[:, cols], 0, v)
-                if self.remove_batch_col and data.batch_col is not None:
-                    tensor = tensor[:, data.batch_col+1:]
+                if self.remove_batch_col and data.has_batch_col:
+                    tensor = tensor[:, BATCH_COL+1:]
 
                 tensors.append(tensor)
 
@@ -144,20 +149,29 @@ class Unwrapper:
         data : IndexBatch
             Index batch product
         """
-        # If there is only one volume, trivial
+        # Unwrap
         if self.num_volumes == 1:
-            return data.split()
+            # If there is only one volume, trivial
+            indexes = data.split()
 
-        # If there is more than one volume, merge them together
-        batch_size = data.batch_size // self.num_volumes
-        indexes = []
-        for b in range(batch_size):
-            index_list = []
-            for v in range(self.num_volumes):
-                idx = b*self.num_volumes + v
-                offset = self.offsets[idx] - self.offsets[b*self.num_volumes]
-                index_list.append(offset + data[idx])
-            
-            indexes.append(np.concatenate(index_list))
+        else:
+            # If there is more than one volume, merge them together
+            batch_size = data.batch_size // self.num_volumes
+            indexes = []
+            for b in range(batch_size):
+                index_list = []
+                for v in range(self.num_volumes):
+                    idx = b*self.num_volumes + v
+                    offset = data.offsets[idx] - data.offsets[b*self.num_volumes]
+                    index_list.append(offset + data[idx])
+                
+                indexes.append(np.concatenate(index_list))
+
+        # Cast the indexes to ObjectList, in case they are empty
+        if isinstance(data, IndexBatch):
+            shape = (0, data.shape[1]) if len(data.shape) == 2 else 0
+            default = np.empty(shape, dtype=np.int64)
+            for i, index in enumerate(indexes):
+                indexes[i] = ObjectList(index, default=default)
 
         return indexes

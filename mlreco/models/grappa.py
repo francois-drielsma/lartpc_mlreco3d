@@ -5,16 +5,17 @@ import numpy as np
 from typing import Union, List, Dict
 
 from .layers.common.dbscan import DBSCAN
-from .layers.factories import final_construct
+from .layers.factories import final_factory
 from .layers.gnn.factories import *
 
-from mlreco.utils.data_structures import (
-        TensorBatch, IndexBatch, EdgeIndexBatch)
+from mlreco import TensorBatch, IndexBatch, EdgeIndexBatch
 from mlreco.utils.globals import (
         BATCH_COL, COORD_COLS, CLUST_COL, GROUP_COL, SHAPE_COL, LOWES_SHP)
 from mlreco.utils.gnn.cluster import (
         form_clusters_batch, get_cluster_label_batch,
         get_cluster_primary_label_batch)
+from mlreco.utils.gnn.evaluation import (
+        node_assignment_batch, node_assignment_score_batch)
 
 __all__ = ['GrapPA', 'GrapPALoss']
 
@@ -118,28 +119,29 @@ class GrapPA(torch.nn.Module):
         self.process_gnn_config(**gnn_model)
 
         # Process the graph configuration
-        self.graph_constructor = graph_construct(graph, self.node_type)
+        self.graph_constructor = graph_factory(graph, self.node_type)
 
         # Process the encoder configurations
-        self.node_encoder = node_encoder_construct(node_encoder)
+        self.node_encoder = node_encoder_factory(node_encoder)
 
         # Initialize edge encoder
         self.edge_encoder = None
         if edge_encoder is not None:
-            self.edge_encoder = edge_encoder_construct(edge_encoder)
+            self.edge_encoder = edge_encoder_factory(edge_encoder)
 
         # Initialize the global encoder
         self.global_encoder = None
         if global_encoder is not None:
-            self.global_encoder = global_encoder_construct(global_encoder)
+            self.global_encoder = global_encoder_factory(global_encoder)
 
         # Process the dbscan fragmenter configuration, if provided
         self.dbscan = None
         if dbscan is not None:
             self.process_dbscan_config(dbscan)
 
-    def process_node_config(self, source=CLUST_COL, 
-                            semantic_class=-1, min_size=-1):
+    def process_node_config(self, source=CLUST_COL, semantic_class=-1,
+                            min_size=-1, make_groups=False,
+                            grouping_method='score'):
         """Process the node parameters of the model.
 
         Parameters
@@ -150,11 +152,17 @@ class GrapPA(torch.nn.Module):
             Type of nodes to include in the input. If -1, include all types
         min_size : int, default -1
             Minimum number of voxels in a cluster to be included in the input
+        make_groups : bool, default False
+            Use edge predictions to build node groups
+        grouping_method : str, default 'score'
+            Algorithm used to build a node partition
         """
         # Store the node parameters
-        self.node_source   = source
-        self.node_type     = semantic_class
-        self.node_min_size = min_size
+        self.node_source     = source
+        self.node_type       = semantic_class
+        self.node_min_size   = min_size
+        self.make_groups     = make_groups
+        self.grouping_method = grouping_method
 
         # Interpret node type as list of classes to cluster
         if isinstance(semantic_class, int):
@@ -182,7 +190,7 @@ class GrapPA(torch.nn.Module):
             Paramters to initialize the GNN backbone
         """
         # Initialize the GNN backbone
-        self.gnn = gnn_model_construct(gnn_model)
+        self.gnn = gnn_model_factory(gnn_model)
 
         # Initialize output layers based on the configuration
         self.process_final_config(node_pred, 'node')
@@ -215,7 +223,7 @@ class GrapPA(torch.nn.Module):
             # Initialize a single final layer (single prediction of this type)
             out_key = f'{prefix}_pred'
             out_keys.append(out_key)
-            setattr(self, out_key, final_construct(in_channels, **final))
+            setattr(self, out_key, final_factory(in_channels, **final))
         else:
             # Otherwise, initialzie one final layer per prediction type
             for key, cfg in final.items():
@@ -224,7 +232,7 @@ class GrapPA(torch.nn.Module):
                 out_keys.append(out_key)
                 if isinstance(cfg, int):
                     cfg = {'name':'linear', 'out_channels':cfg}
-                setattr(self, out_key, final_construct(in_channels, **cfg))
+                setattr(self, out_key, final_factory(in_channels, **cfg))
 
         setattr(self, f'{prefix}_pred_keys', out_keys)
 
@@ -266,7 +274,7 @@ class GrapPA(torch.nn.Module):
             (P, 1 + 2*D + 2) Tensor of label points (start/end/time/shape)
         clusts : IndexBatch, optional
             (C) List of indexes corresponding to each cluster
-        classes : np.ndarray, optional
+        classes : TensorBatch, optional
             (C) List of cluster semantic class used to define the max length
         groups : TensorBatch, optional
             (C) List of node groups, one per cluster. If specified, will
@@ -298,16 +306,14 @@ class GrapPA(torch.nn.Module):
         # Cast the labels to numpy for the functions run on CPU
         result = {}
         data_np = data.to_numpy()
-        coord_label_np = None
-        if coord_label is not None:
-            coord_label_np = coord_label.to_numpy()
 
         # If not provided, form the clusters: a list of list of voxel indices,
         # one list per cluster matching the list of requested class
         if clusts is None:
             if self.dbscan is not None:
                 # Use the DBSCAN fragmenter to build the clusters
-                clusts = self.dbscan(data_np, coord_label_np)
+                seg_label = TensorBatch(data.tensor[:, SHAPE_COL], data.counts)
+                clusts, _ = self.dbscan(data, seg_label, coord_label)
             else:
                 # Use the label tensor to build the clusters
                 clusts = form_clusters_batch(
@@ -358,7 +364,7 @@ class GrapPA(torch.nn.Module):
             global_features = self.global_encoder(data, clusts)
 
         # Bring edge_index and batch_ids to device
-        # TODO: try to keep everything (apart from clusts) on GPU?
+        # TODO: try to keep everything (apart from clusts?) on GPU?
         index = torch.tensor(edge_index.index, device=data.tensor.device)
         xbatch = torch.tensor(clusts.batch_ids, device=data.tensor.device)
 
@@ -370,6 +376,21 @@ class GrapPA(torch.nn.Module):
         for t in self.out_types:
             for key in getattr(self, f'{t}_pred_keys'):
                 result[key] = getattr(self, key)(out[f'{t}_features'])
+
+        # If requested, build node groups from edge predictions
+        if self.make_groups:
+            assert 'edge_pred' in result, (
+                    "Must provide edge predictions to build node groups.")
+            edge_pred = result['edge_pred'].to_numpy()
+            if self.grouping_method == 'threshold':
+                result['group_pred'] = node_assignment_batch(
+                        edge_index, edge_pred, clusts)
+            elif self.grouping_method == 'score':
+                result['group_pred'] = node_assignment_score_batch(
+                        edge_index, edge_pred, clusts)
+            else:
+                raise ValueError("Group prediction algorithm not "
+                                 "recognized:", self.grouping_method)
 
         return result
 
@@ -403,15 +424,15 @@ class GrapPALoss(torch.nn.modules.loss._Loss):
     directory for detailed examples of working configurations.
     """
 
-    def __init__(self, grappa, grappa_loss):
+    def __init__(self, grappa_loss, grappa=None):
         """Initialize the GrapPA loss function.
 
         Parameters
         ----------
-        grappa : dict
-            Model configuration
-        grappa_loss : dict, optional
+        grappa_loss : dict
             Loss configuration
+        grappa : dict, optional
+            Model configuration
         """
         # Initialize the parent class
         super().__init__()
@@ -442,11 +463,11 @@ class GrapPALoss(torch.nn.modules.loss._Loss):
 
         # Initialize the node/edge/global losses
         self.process_single_loss_config(
-                'node', node_loss, node_loss_construct)
+                'node', node_loss, node_loss_factory)
         self.process_single_loss_config(
-                'edge', edge_loss, edge_loss_construct)
+                'edge', edge_loss, edge_loss_factory)
         self.process_single_loss_config(
-                'global', global_loss, global_loss_construct)
+                'global', global_loss, global_loss_factory)
 
     def process_single_loss_config(self, prefix, loss, constructor):
         """Process a loss configuration.
@@ -496,8 +517,8 @@ class GrapPALoss(torch.nn.modules.loss._Loss):
         coord_label : TensorBatch, optional
             (P, 1 + D + 8) Tensor of start/end point labels for each
             true particle in the image
-        graph_label : TensorBatch, optional
-            (E, 1 + 2) Tensor of edges that correspond to physical
+        graph_label : EdgeIndexTensor, optional
+            (2, E) Tensor of edges that correspond to physical
             connections between true particle in the image
         iteration : int, optional
             Iteration index
