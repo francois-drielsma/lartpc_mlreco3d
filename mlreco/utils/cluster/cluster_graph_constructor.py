@@ -20,7 +20,7 @@ from torch_geometric.data import Data, Batch
 
 from mlreco import TensorBatch, IndexBatch, EdgeIndexBatch
 from mlreco.utils.metrics import ARI, SBD, purity, efficiency
-from mlreco.utils.data_structures import TensorBatch, IndexBatch, EdgeIndexBatch
+from mlreco.data_structures import TensorBatch, IndexBatch, EdgeIndexBatch
 from mlreco.utils.gnn.cluster import form_clusters_batch, form_clusters
 from .helpers import ConnectedComponentsDeprecated, knn_sklearn
 import sys

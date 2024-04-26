@@ -18,7 +18,7 @@ from torch_geometric.utils import to_scipy_sparse_matrix
 from torch_geometric.data import Data, Batch
 from sklearn.cluster import DBSCAN
 
-from mlreco.utils.data_structures import TensorBatch
+from mlreco.data_structures import TensorBatch
 
 import copy
 # -------------------------- Helper Functions--------------------------------

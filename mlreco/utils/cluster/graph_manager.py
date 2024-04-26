@@ -8,7 +8,7 @@ from torch_cluster import knn_graph, radius_graph
 from mlreco.utils.globals import *
 
 from mlreco.utils.metrics import ARI, SBD, purity, efficiency
-from mlreco.utils.data_structures import TensorBatch, IndexBatch, EdgeIndexBatch
+from mlreco.data_structures import TensorBatch, IndexBatch, EdgeIndexBatch
 from mlreco.utils.gnn.cluster import form_clusters_batch, form_clusters
 from .helpers import ConnectedComponents, knn_sklearn
 import sys
